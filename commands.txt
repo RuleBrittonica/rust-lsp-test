@@ -1,0 +1,28 @@
+
+// Initialisation 1
+
+Content-Length: 85
+
+{"jsonrpc": "2.0", "method": "initialize", "id": 1, "params": {"capabilities": {}}}
+
+// Initialisation 2
+
+Content-Length: 59
+
+{"jsonrpc": "2.0", "method": "initialized", "params": {}}
+
+Content-Length: 159
+
+{"jsonrpc": "2.0", "method": "textDocument/definition", "id": 2, "params": {"textDocument": {"uri": "file://temp"}, "position": {"line": 1, "character": 1}}}
+
+// Shutdown 1
+
+Content-Length: 67
+
+{"jsonrpc": "2.0", "method": "shutdown", "id": 3, "params": null}
+
+// Shutdown 2
+
+Content-Length: 54
+
+{"jsonrpc": "2.0", "method": "exit", "params": null}
