@@ -1,1 +1,7 @@
-{"jsonrpc": "2.0", "method": "shutdown", "id": 3, "params": null}
+{
+    "jsonrpc": "2.0",
+    "method":
+    "shutdown",
+    "id": 3,
+    "params": null
+}

@@ -1,9 +1,11 @@
 #![allow(clippy::print_stderr)]
 
 use std::error::Error;
+use std::fs::File;
 use std::io::{
     self,
     BufRead,
+    BufReader,
     Write
 };
 use std::sync::{
@@ -11,6 +13,7 @@ use std::sync::{
     Mutex
 };
 use std::thread;
+use std::time::Duration;
 use lsp_types::OneOf;
 use lsp_types::{
     request::GotoDefinition,
@@ -20,25 +23,21 @@ use lsp_types::{
     CodeActionProviderCapability,
 };
 use lsp_server::{
-    Connection,
-    ExtractError,
-    Message,
-    Request,
-    RequestId,
-    Response
+    Connection, ExtractError, Message, ReqQueue, Request, RequestId, Response
 };
 
 use serde::{
     Deserialize,
     Serialize
 };
+use serde_json::Value;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct Command {
     jsonrpc: String,
     method: String,
-    id: Option<u64>,
-    params: Option<serde_json::Value>,
+    id: Option<i32>,
+    params: Value,
 }
 
 fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -47,11 +46,18 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let (connection, io_threads) = Connection::stdio();
     let connection = Arc::new(Mutex::new(connection)); // Wrap connection in Arc<Mutex>
 
+    eprintln!("Connection established");
+
     let server_capabilities = serde_json::to_value(&ServerCapabilities {
         definition_provider: Some(OneOf::Left(true)),
         code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
         ..Default::default()
     })?;
+
+    eprintln!("Initializing LSP Server");
+
+    // Send initial commands
+    // send_initial_commands(&connection)?;
 
     let initialization_params = match connection.lock().unwrap().initialize(server_capabilities) {
         Ok(it) => it,
@@ -63,24 +69,31 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         }
     };
 
+    eprintln!("Initialized with params: {:#?}", initialization_params);
+
+    // These txt files contain the exact command that would normally be pasted
+    // into std in. We will read these files and send the commands to the LSP
+    let command_file_paths = vec![
+        "src/json/goto.json",
+        "src/json/shutdown.json",
+        "src/json/exit.json",
+    ];
+
     // Start the input handler in a separate thread
-    let connection_clone = Arc::clone(&connection);
-    thread::spawn(move || {
-        let stdin = io::stdin();
-        let reader = stdin.lock();
-        for line in reader.lines() {
-            if let Ok(command_input) = line {
-                // Here, command_input should be an index referring to the commands loaded from JSON
-                if let Ok(command_index) = command_input.parse::<usize>() {
-                    if let Err(e) = send_command(&connection_clone, command_index) {
-                        eprintln!("Error sending command: {e}");
-                    }
-                } else {
-                    eprintln!("Invalid command input: {command_input}");
-                }
-            }
-        }
-    });
+    // let connection_clone = Arc::clone(&connection);
+    // // TODO: Read in the input files once every second, and send the commands to
+    // // the server
+    // thread::spawn(move || {
+    //     loop {
+    //         // Wait for a second before checking for commands
+    //         thread::sleep(Duration::from_secs(1));
+    //         for file_path in &command_file_paths {
+    //             if let Err(e) = read_and_send_command(&connection_clone, file_path) {
+    //                 eprintln!("Error reading from {}: {:?}", file_path, e);
+    //             }
+    //         }
+    //     }
+    // });
 
     main_loop(Arc::clone(&connection), initialization_params)?;
     io_threads.join()?;
@@ -89,48 +102,46 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     Ok(())
 }
 
-fn load_commands(filepaths: &[&str]) -> Result<Vec<Command>, Box<dyn Error>> {
-    let mut commands: Vec<Command> = Vec::new();
-    for &filepath in filepaths {
-        let file = std::fs::File::open(filepath)?;
-        let reader = io::BufReader::new(file);
-        let mut loaded_commands: Vec<Command> = serde_json::from_reader(reader)?;
-        commands.append(&mut loaded_commands); // Add loaded commands to the main vector
-    }
-    Ok(commands)
-}
-
-fn send_command(connection: &Arc<Mutex<Connection>>, command_index: usize) -> Result<(), Box<dyn Error + Sync + Send>> {
-    let conn = connection.lock().unwrap(); // Lock the connection
-
-    let filepaths = vec![
+fn send_initial_commands(connection: &Arc<Mutex<Connection>>) -> Result<(), Box<dyn Error + Sync + Send>> {
+    // Specify the commands you want to send initially
+    let initial_commands = vec![
         "src/json/initialize.json",
         "src/json/initialized.json",
-        "src/json/goto.json",
-        "src/json/shutdown.json",
-        "src/json/exit.json",
     ];
 
-    // Load all commands from the specified JSON files
-    let commands: Vec<Command> = load_commands(&filepaths).unwrap();
-
-    // Ensure the command index is valid
-    if command_index >= commands.len() {
-        return Err("Invalid command index".into());
+    for file_path in initial_commands {
+        if let Err(e) = read_and_send_command(connection, file_path) {
+            eprintln!("Error sending initial command from {}: {:?}", file_path, e);
+        }
     }
 
-    // Get the command to send
-    let command: Command = commands[command_index].clone();
+    Ok(())
+}
 
-    // Create a Message::Request from the loaded command
-    let request_message: Message = Message::Request(Request {
-        id: RequestId::from(1), // Fallback to a default ID
+fn read_and_send_command(connection: &Arc<Mutex<Connection>>, file_path: &str) -> Result<(), Box<dyn Error + Sync + Send>> {
+    // Open the command file
+    let file = File::open(file_path)?;
+    let reader: BufReader<File> = BufReader::new(file);
+
+    // Read the json in from the file
+    let file_contents: String = reader
+        .lines()
+        .filter_map(|line| line.ok()) // Filter out errors
+        .collect::<Vec<_>>() // Collect lines into a Vec
+        .join("\n"); // Join with newline to ensure valid JSON if needed
+
+    eprintln!("Reading command from {}: {}", file_path, file_contents);
+
+    // Ensure the JSON is valid
+    let command: Command = serde_json::from_str(&file_contents)?;
+
+    // Send the command to the LSP server
+    let conn = connection.lock().unwrap();
+    conn.sender.send(Message::Request(Request {
+        id: RequestId::from(command.id.unwrap_or(1)), // Handle IDs appropriately
         method: command.method,
-        params: command.params.unwrap(),
-    });
-
-    // Send the request over the connection
-    conn.sender.send(request_message)?; // Send the request message
+        params: command.params,
+    }))?;
 
     Ok(())
 }
