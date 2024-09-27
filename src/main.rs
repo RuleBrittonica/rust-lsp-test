@@ -57,7 +57,7 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     eprintln!("Initializing LSP Server");
 
     // Send initial commands
-    // send_initial_commands(&connection)?;
+    send_initial_commands(&connection)?;
 
     let initialization_params = match connection.lock().unwrap().initialize(server_capabilities) {
         Ok(it) => it,
@@ -80,20 +80,20 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     ];
 
     // Start the input handler in a separate thread
-    // let connection_clone = Arc::clone(&connection);
+    let connection_clone = Arc::clone(&connection);
     // // TODO: Read in the input files once every second, and send the commands to
     // // the server
-    // thread::spawn(move || {
-    //     loop {
-    //         // Wait for a second before checking for commands
-    //         thread::sleep(Duration::from_secs(1));
-    //         for file_path in &command_file_paths {
-    //             if let Err(e) = read_and_send_command(&connection_clone, file_path) {
-    //                 eprintln!("Error reading from {}: {:?}", file_path, e);
-    //             }
-    //         }
-    //     }
-    // });
+    thread::spawn(move || {
+        loop {
+            // Wait for a second before checking for commands
+            thread::sleep(Duration::from_secs(1));
+            for file_path in &command_file_paths {
+                if let Err(e) = read_and_send_command(&connection_clone, file_path) {
+                    eprintln!("Error reading from {}: {:?}", file_path, e);
+                }
+            }
+        }
+    });
 
     main_loop(Arc::clone(&connection), initialization_params)?;
     io_threads.join()?;
